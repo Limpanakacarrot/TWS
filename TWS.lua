@@ -388,9 +388,9 @@ end
 local miningPage = pages.mining
 
 local subSpecs = {
+	{ id = "mine", label = "AUTO MINE" },
 	{ id = "ores", label = "ORES" },
 	{ id = "counts", label = "COUNTS" },
-	{ id = "mine", label = "AUTO MINE" },
 	{ id = "teleport", label = "TELEPORT" },
 }
 local subPages = {}
@@ -1725,16 +1725,74 @@ end)
 end)()
 
 ;(function()
+	local questRow, questStatus = createRow(minePage, 192, "Auto mine quest", "Off")
+	local questState = { enabled = false, interval = 0.25 }
+
+	createSwitch(questRow, false, function(value)
+		questState.enabled = value
+		questStatus.Text = value and "Starting..." or "Off"
+	end)
+
+	local function getPickaxeNpcDetector()
+		local npc = workspace:FindFirstChild("npc_becuz_why_not")
+		local pickaxeNpc = npc and npc:FindFirstChild("FreePickaxeNPC")
+		return pickaxeNpc and pickaxeNpc:FindFirstChild("ClickDetector")
+	end
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if questState.enabled then
+				local detector = getPickaxeNpcDetector()
+				if not detector then
+					questStatus.Text = "NPC pickaxe not found"
+				elseif not fireclickdetector then
+					questStatus.Text = "fireclickdetector unavailable"
+				else
+					fireclickdetector(detector)
+					questStatus.Text = "Clicking NPC pickaxe"
+				end
+			end
+			task.wait(questState.interval)
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		questState.enabled = false
+	end)
+end)()
+
+;(function()
 	local VirtualInputManager = game:GetService("VirtualInputManager")
 	local fishState = globalConnections.fish
+	fishState.tool = nil
 	local fishPage = pages.fishing
-	local fishSwitchRow, fishStatus = createRow(fishPage, 0, "Auto fish", "Off")
+
+	local fishSwitchRow, fishStatus = createRow(fishPage, 38, "Auto fish", "Off")
+	local rodRow = createRow(fishPage, 102, "Rod")
+	local rodButton = createValueButton(rodRow, "No rod selected" .. CHEVRON_DOWN, 265)
+	local questRow, questStatus = createRow(fishPage, 166, "Auto fishing quest", "Off")
+	local teleportRow = createRow(fishPage, 230, "Teleports", "Pond and shop")
+	local rodList = createDropdownList(fishPage, 164)
+	local rodDropdownOpen = false
+
+	local caughtLabel = make("TextLabel", fishPage, {
+		Name = "FishesCaughtLabel",
+		Position = UDim2.new(1, -260, 0, 0),
+		Size = UDim2.fromOffset(260, 28),
+		BackgroundTransparency = 1,
+		Text = "fishes caught: --",
+		TextColor3 = MUTED,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Active = false,
+		ZIndex = 9,
+	})
 
 	local CAST_CFRAME = CFrame.new(
 		-48.541969299316406, 742.702392578125, 193.20567321777344,
 		1, 0, 0, 0, 1, 0, 0, 0, 1
 	)
-	local ROD_NAME = "fishing rod"
 	local LOOP_INTERVAL = 0.1
 	local CAST_INTERVAL = 0.5
 	local CLICK_HOLD = 0.03
@@ -1750,6 +1808,113 @@ end)()
 			fishStatus.Text = text
 		end
 	end
+
+	local function updateRodText()
+		local label = fishState.tool and (toolLabels[fishState.tool] or fishState.tool.Name) or "No rod selected"
+		rodButton.Text = label .. (rodDropdownOpen and CHEVRON_UP or CHEVRON_DOWN)
+	end
+
+	local function setRodDropdownOpen(open)
+		rodDropdownOpen = open
+		animate(rodList, 0.22, { Size = UDim2.fromOffset(704, open and 100 or 0) })
+		updateRodText()
+	end
+
+	local function rebuildRodOptions(tools)
+		for _, child in ipairs(rodList:GetChildren()) do
+			if child:IsA("GuiButton") or child:IsA("TextLabel") then
+				child:Destroy()
+			end
+		end
+
+		if #tools == 0 then
+			make("TextLabel", rodList, {
+				Size = UDim2.new(1, -12, 0, 30),
+				BackgroundTransparency = 1,
+				Text = "No tools in inventory",
+				TextColor3 = MUTED,
+				Font = Enum.Font.Gotham,
+				TextSize = 11,
+				ZIndex = 9,
+			})
+			rodList.CanvasSize = UDim2.new(0, 0, 0, 40)
+			updateRodText()
+			return
+		end
+
+		for index, tool in ipairs(tools) do
+			local isSelected = fishState.tool == tool
+			local row = make("TextButton", rodList, {
+				LayoutOrder = index,
+				Size = UDim2.new(1, -4, 0, 31),
+				BackgroundColor3 = isSelected and ACTIVE_GREEN or ROW,
+				BorderSizePixel = 0,
+				Text = "",
+				AutoButtonColor = false,
+				ZIndex = 9,
+			})
+			addCorner(row, 7)
+			make("TextLabel", row, {
+				Position = UDim2.fromOffset(14, 0),
+				Size = UDim2.new(1, -112, 1, 0),
+				BackgroundTransparency = 1,
+				Text = toolLabels[tool] or tool.Name,
+				TextColor3 = isSelected and Color3.fromRGB(210, 239, 216) or Color3.fromRGB(222, 222, 224),
+				Font = Enum.Font.Gotham,
+				TextSize = 11,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 10,
+			})
+			make("TextLabel", row, {
+				Position = UDim2.new(1, -92, 0, 0),
+				Size = UDim2.fromOffset(78, 31),
+				BackgroundTransparency = 1,
+				Text = isSelected and "SELECTED" or "",
+				TextColor3 = Color3.fromRGB(198, 232, 205),
+				Font = Enum.Font.GothamBold,
+				TextSize = 9,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				ZIndex = 10,
+			})
+			row.Activated:Connect(function()
+				fishState.tool = tool
+				setRodDropdownOpen(false)
+				scheduleToolRefresh()
+			end)
+			addHover(row, isSelected and ACTIVE_GREEN or ROW, isSelected and Color3.fromRGB(49, 87, 65) or ROW_HOVER)
+		end
+		rodList.CanvasSize = UDim2.new(0, 0, 0, #tools * 35 + 10)
+		updateRodText()
+	end
+
+	local function refreshRods()
+		local tools, seen = collectTools()
+		if fishState.tool and not seen[fishState.tool] then
+			fishState.tool = nil
+		end
+		if not fishState.tool then
+			for _, tool in ipairs(tools) do
+				if tool.Name:lower():find("rod", 1, true) then
+					fishState.tool = tool
+					break
+				end
+			end
+		end
+		rebuildRodOptions(tools)
+		if not fishState.enabled then
+			setStatus("Off")
+		end
+	end
+
+	local baseRefreshTools = refreshTools
+	refreshTools = function()
+		baseRefreshTools()
+		refreshRods()
+	end
+
+	rodButton.Activated:Connect(function()
+		setRodDropdownOpen(not rodDropdownOpen)
+	end)
 
 	local function installHook()
 		if hookInstalled then
@@ -1783,26 +1948,13 @@ end)()
 		end
 	end)
 
-	make("TextLabel", fishPage, {
-		Position = UDim2.fromOffset(4, 70),
-		Size = UDim2.fromOffset(200, 16),
-		BackgroundTransparency = 1,
-		Text = "TELEPORTS",
-		TextColor3 = DIM,
-		Font = Enum.Font.GothamBold,
-		TextSize = 10,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		ZIndex = 9,
-	})
-
-	local function addFishTeleport(y, title, x, py, z)
-		local row = createRow(fishPage, y, title, string.format("%d, %d, %d", x, py, z))
-		local button = make("TextButton", row, {
-			Position = UDim2.new(1, -132, 0.5, -19),
-			Size = UDim2.fromOffset(114, 38),
+	local function addTeleportButton(offsetFromRight, text, x, y, z)
+		local button = make("TextButton", teleportRow, {
+			Position = UDim2.new(1, -offsetFromRight, 0.5, -19),
+			Size = UDim2.fromOffset(100, 38),
 			BackgroundColor3 = Color3.fromRGB(40, 38, 40),
 			BorderSizePixel = 0,
-			Text = "TELEPORT",
+			Text = text,
 			TextColor3 = Color3.fromRGB(228, 228, 230),
 			Font = Enum.Font.GothamBold,
 			TextSize = 10,
@@ -1812,12 +1964,85 @@ end)()
 		addStroke(button, OUTLINE, 0.2)
 		addHover(button, Color3.fromRGB(40, 38, 40), mutedRed)
 		button.Activated:Connect(function()
-			teleportTo(x, py, z)
+			teleportTo(x, y, z)
 		end)
 	end
+	addTeleportButton(220, "POND", -41, 748, 193)
+	addTeleportButton(112, "SHOP", 37, 756, 348)
 
-	addFishTeleport(92, "Pond", -41, 748, 193)
-	addFishTeleport(156, "Shop", 37, 756, 348)
+	local questState = { enabled = false, interval = 0.25 }
+	createSwitch(questRow, false, function(value)
+		questState.enabled = value
+		questStatus.Text = value and "Starting..." or "Off"
+	end)
+
+	local function getLeaderDetector()
+		local area = workspace:FindFirstChild("NeutralArea")
+		local leader = area and area:FindFirstChild("leader_null")
+		return leader and leader:FindFirstChild("ClickDetector")
+	end
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if questState.enabled then
+				local detector = getLeaderDetector()
+				if not detector then
+					questStatus.Text = "Quest NPC not found"
+				elseif not fireclickdetector then
+					questStatus.Text = "fireclickdetector unavailable"
+				else
+					fireclickdetector(detector)
+					questStatus.Text = "Clicking quest NPC"
+				end
+			end
+			task.wait(questState.interval)
+		end
+	end)
+
+	local caughtValueLabel
+	local caughtConnection
+
+	local function findCaughtLabel()
+		local main = workspace:FindFirstChild("MainPlace")
+		local boxValue = main and main:FindFirstChild("BoxValue")
+		local value = boxValue and boxValue:FindFirstChild("YourFishingQuestDiffValue")
+		local surface = value and value:FindFirstChild("SurfaceGui")
+		local label = surface and surface:FindFirstChild("TextLabel")
+		if label and label:IsA("TextLabel") then
+			return label
+		end
+		return nil
+	end
+
+	local function updateCaughtText()
+		caughtLabel.Text = "fishes caught: " .. (caughtValueLabel and caughtValueLabel.Text or "--")
+	end
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			local label = findCaughtLabel()
+			if label ~= caughtValueLabel then
+				if caughtConnection then
+					caughtConnection:Disconnect()
+					caughtConnection = nil
+				end
+				caughtValueLabel = label
+				if label then
+					caughtConnection = label:GetPropertyChangedSignal("Text"):Connect(updateCaughtText)
+				end
+			end
+			updateCaughtText()
+			task.wait(1)
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		questState.enabled = false
+		if caughtConnection then
+			caughtConnection:Disconnect()
+			caughtConnection = nil
+		end
+	end)
 
 	local function click()
 		VirtualInputManager:SendMouseButtonEvent(500, 500, 0, true, game, 0)
@@ -1826,7 +2051,7 @@ end)()
 	end
 
 	task.spawn(function()
-		local rod
+		local lastRod
 		local remote
 		local water
 		local lastCast = 0
@@ -1834,26 +2059,25 @@ end)()
 		while gui.Parent == playerGui do
 			if fishState.enabled then
 				local character = player.Character
+				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+				local backpack = player:FindFirstChildOfClass("Backpack")
+				local rod = fishState.tool
 
-				if not (rod and character and rod.Parent == character) then
-					rod = character and character:FindFirstChild(ROD_NAME)
-					if rod and not rod:IsA("Tool") then
-						rod = nil
-					end
+				if rod ~= lastRod then
+					lastRod = rod
 					remote = nil
 					fishRemote = nil
-					if not rod and character then
-						local backpack = player:FindFirstChildOfClass("Backpack")
-						local packed = backpack and backpack:FindFirstChild(ROD_NAME)
-						local humanoid = character:FindFirstChildOfClass("Humanoid")
-						if packed and packed:IsA("Tool") and humanoid then
-							humanoid:EquipTool(packed)
-						end
-					end
 				end
 
-				if not rod then
-					setStatus("Waiting for fishing rod...")
+				if not (character and humanoid) then
+					setStatus("Waiting for character...")
+				elseif not rod then
+					setStatus("Choose a rod")
+				elseif rod.Parent ~= character and not (backpack and rod.Parent == backpack) then
+					setStatus("Rod no longer in inventory")
+				elseif rod.Parent ~= character then
+					setStatus("Equipping " .. rod.Name .. "...")
+					humanoid:EquipTool(rod)
 				else
 					if not (remote and remote.Parent) then
 						local scanner = rod:FindFirstChild("HitScanner")
@@ -2676,7 +2900,7 @@ table.insert(folderConnections, blocksFolder.DescendantRemoving:Connect(schedule
 
 refreshColors()
 refreshTools()
-selectSubTab("ores")
+selectSubTab("mine")
 selectTab("mining")
 
 gui.Destroying:Connect(function()
