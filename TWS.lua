@@ -281,6 +281,7 @@ local tabSpecs = {
 	{ id = "box", label = "BOX" },
 	{ id = "fishing", label = "FISHING" },
 	{ id = "mopping", label = "MOPPING" },
+    { id = "planetarium", label = "PLANETARIUM" },
 	{ id = "settings", label = "SETTINGS" },
 	{ id = "credits", label = "CREDITS" },
 }
@@ -288,8 +289,8 @@ local pages = {}
 local tabButtons = {}
 local TAB_IDLE = Color3.fromRGB(140, 140, 145)
 local PAGE_Y = 118
-local TAB_PITCH = 117
-local TAB_WIDTH = 111
+local TAB_PITCH = 100
+local TAB_WIDTH = 96
 local INDICATOR_WIDTH = 60
 local INDICATOR_INSET = (TAB_WIDTH - INDICATOR_WIDTH) / 2
 
@@ -2579,6 +2580,481 @@ end)()
 			puddlesValueConnection:Disconnect()
 			puddlesValueConnection = nil
 		end
+	end)
+end)()
+
+;(function()
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local planetPage = pages.planetarium
+	local state = { enabled = false }
+
+	local REQUIRED_POSITION = Vector3.new(537, 3223, 545)
+	local POSITION_TOLERANCE = 1
+	local MOVE_DT = 0.04
+	local APPROX_STEP = 5
+	local PRECISION_START_STEP = 20
+	local PITCH_EPSILON = 0.0001
+	local INACTIVITY_LIMIT = 5
+	local STEP_TIMEOUT = 0.3
+	local SOUND_SETTLE = 0.1
+	local APPROX_SOUND_WAIT = 0.4
+
+	local KEY_W = Enum.KeyCode.W
+	local KEY_A = Enum.KeyCode.A
+	local KEY_S = Enum.KeyCode.S
+	local KEY_D = Enum.KeyCode.D
+
+	local DIRECTIONS = { KEY_A, KEY_D, KEY_W, KEY_S }
+	local OPPOSITE = {
+		[KEY_A] = KEY_D,
+		[KEY_D] = KEY_A,
+		[KEY_W] = KEY_S,
+		[KEY_S] = KEY_W,
+	}
+
+	local switchRow, statusLabel = createRow(planetPage, 38, "Auto telescope", "Off")
+	local bestRow, bestLabel = createRow(planetPage, 102, "Best found", "No measurement yet")
+
+	local lastStatus
+	local function setStatus(text)
+		if lastStatus ~= text then
+			lastStatus = text
+			statusLabel.Text = text
+		end
+	end
+
+	local Remote, Click, TelescopeSound, CoordLabel
+
+	local function resolve()
+		if Remote and Remote.Parent and Click and Click.Parent and TelescopeSound and TelescopeSound.Parent and CoordLabel and CoordLabel.Parent then
+			return true
+		end
+		local remote = ReplicatedStorage:FindFirstChild("TelescopeControls")
+		local planetarium = workspace:FindFirstChild("Planetarium")
+		local telescope = planetarium and planetarium:FindFirstChild("telescope")
+		local lenses = telescope and telescope:FindFirstChild("lenses")
+		local coordsPart = lenses and lenses:FindFirstChild("Coords")
+		local sound = coordsPart and coordsPart:FindFirstChild("Sound")
+		local surface = coordsPart and coordsPart:FindFirstChild("SurfaceGui")
+		local label = surface and surface:FindFirstChild("TextLabel")
+		local click = telescope and telescope:FindFirstChild("ClickDetector")
+		if remote and sound and label and click then
+			Remote, TelescopeSound, CoordLabel, Click = remote, sound, label, click
+			return true
+		end
+		return false
+	end
+
+	local borders = {}
+	local lastValidMeasurement = os.clock()
+	local bestPitch = -math.huge
+	local bestX, bestY = nil, nil
+
+	local function stopped()
+		return not state.enabled or gui.Parent ~= playerGui
+	end
+
+	local function getRoot()
+		local character = player.Character
+		return character and character:FindFirstChild("HumanoidRootPart")
+	end
+
+	local function atRequiredPosition()
+		local root = getRoot()
+		return root ~= nil and (root.Position - REQUIRED_POSITION).Magnitude <= POSITION_TOLERANCE
+	end
+
+	local function activateClick()
+		if Click and fireclickdetector then
+			pcall(function()
+				fireclickdetector(Click)
+			end)
+		end
+	end
+
+	local function ensurePosition()
+		while not stopped() and not atRequiredPosition() do
+			activateClick()
+			task.wait(0.25)
+		end
+	end
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if state.enabled and Click and not atRequiredPosition() then
+				activateClick()
+			end
+			task.wait(0.25)
+		end
+	end)
+
+	local function getCoords()
+		local numbers = {}
+		for value in string.gmatch(CoordLabel.Text, "-?%d+%.?%d*") do
+			numbers[#numbers + 1] = tonumber(value)
+			if #numbers == 2 then
+				break
+			end
+		end
+		if #numbers < 2 then
+			return nil, nil
+		end
+		return numbers[1], numbers[2]
+	end
+
+	local function readCoords()
+		for _ = 1, 20 do
+			local x, y = getCoords()
+			if x then
+				return x, y
+			end
+			task.wait(0.03)
+		end
+		return nil, nil
+	end
+
+	local function borderKey(x, y, key)
+		return x .. "," .. y .. "," .. key.Name
+	end
+
+	local function isBorder(x, y, key)
+		return borders[borderKey(x, y, key)] == true
+	end
+
+	local function markBorder(x, y, key)
+		borders[borderKey(x, y, key)] = true
+	end
+
+	local function stepOnce(key)
+		local beforeX, beforeY = readCoords()
+		if not beforeX then
+			return false
+		end
+		Remote:FireServer({
+			ty = 0,
+			key = key,
+			dt = MOVE_DT,
+		})
+		local deadline = os.clock() + STEP_TIMEOUT
+		repeat
+			task.wait(0.03)
+			local x, y = getCoords()
+			if x and (x ~= beforeX or y ~= beforeY) then
+				return true
+			end
+		until os.clock() >= deadline or stopped()
+		return false
+	end
+
+	local function moveSteps(key, count)
+		local moved = 0
+		for _ = 1, count do
+			if stopped() then
+				break
+			end
+			ensurePosition()
+			local x, y = readCoords()
+			if not x then
+				break
+			end
+			if isBorder(x, y, key) then
+				break
+			end
+			if stepOnce(key) then
+				moved = moved + 1
+			else
+				markBorder(x, y, key)
+				break
+			end
+		end
+		return moved
+	end
+
+	local function navigateTo(targetX, targetY)
+		for _ = 1, 600 do
+			if stopped() then
+				return false
+			end
+			local x, y = readCoords()
+			if not x then
+				return false
+			end
+			if x == targetX and y == targetY then
+				return true
+			end
+			local key
+			if x < targetX then
+				key = KEY_D
+			elseif x > targetX then
+				key = KEY_A
+			elseif y < targetY then
+				key = KEY_W
+			else
+				key = KEY_S
+			end
+			ensurePosition()
+			if not stepOnce(key) then
+				return false
+			end
+		end
+		return false
+	end
+
+	local function waitForPitch(timeout, watchdog)
+		local deadline = os.clock() + timeout
+		while not stopped() do
+			if watchdog and os.clock() - lastValidMeasurement > INACTIVITY_LIMIT then
+				return nil
+			end
+			if TelescopeSound.IsPlaying then
+				task.wait(SOUND_SETTLE)
+				if TelescopeSound.IsPlaying then
+					local pitch = TelescopeSound.PlaybackSpeed
+					lastValidMeasurement = os.clock()
+					return pitch
+				end
+			end
+			if os.clock() >= deadline then
+				return nil
+			end
+			task.wait(0.03)
+		end
+		return nil
+	end
+
+	local function updateBest(pitch, x, y)
+		if pitch > bestPitch then
+			bestPitch = pitch
+			bestX, bestY = x, y
+			bestLabel.Text = string.format("X=%s  Y=%s  |  pitch %.4f", tostring(x), tostring(y), pitch)
+		end
+	end
+
+	local function recordBest(pitch)
+		local x, y = readCoords()
+		if x then
+			updateBest(pitch, x, y)
+		end
+	end
+
+	local function approximateSearch()
+		local referencePitch = nil
+
+		local function approxMove(key)
+			local moved = moveSteps(key, APPROX_STEP)
+			if stopped() then
+				return moved, false
+			end
+			local pitch = waitForPitch(APPROX_SOUND_WAIT, false)
+			if pitch then
+				recordBest(pitch)
+				if not referencePitch then
+					referencePitch = pitch
+				elseif math.abs(pitch - referencePitch) > PITCH_EPSILON then
+					return moved, true
+				end
+			end
+			return moved, false
+		end
+
+		for _, key in ipairs({ KEY_A, KEY_S }) do
+			while not stopped() do
+				local moved, found = approxMove(key)
+				if found then
+					return "precision"
+				end
+				if moved < APPROX_STEP then
+					break
+				end
+			end
+		end
+
+		local xKey = KEY_D
+		local yKey = KEY_W
+		while not stopped() do
+			while not stopped() do
+				local moved, found = approxMove(xKey)
+				if found then
+					return "precision"
+				end
+				if moved < APPROX_STEP then
+					break
+				end
+			end
+			if stopped() then
+				break
+			end
+			local movedY, found = approxMove(yKey)
+			if found then
+				return "precision"
+			end
+			if movedY == 0 then
+				yKey = OPPOSITE[yKey]
+				local retried, foundAgain = approxMove(yKey)
+				if foundAgain then
+					return "precision"
+				end
+				if retried == 0 then
+					yKey = OPPOSITE[yKey]
+				end
+			end
+			xKey = OPPOSITE[xKey]
+		end
+		return "stopped"
+	end
+
+	local function precisionSearch()
+		lastValidMeasurement = os.clock()
+
+		local baseline = waitForPitch(math.huge, true)
+		if not baseline then
+			return stopped() and "stopped" or "restart"
+		end
+
+		local currentPitch = baseline
+		recordBest(baseline)
+		local step = PRECISION_START_STEP
+		local visited = {}
+
+		local function posKey(x, y)
+			return x .. "," .. y
+		end
+
+		while true do
+			if stopped() then
+				return "stopped"
+			end
+
+			local originX, originY = readCoords()
+			if not originX then
+				return "restart"
+			end
+
+			visited[posKey(originX, originY)] = true
+
+			local candidate = nil
+
+			for _, key in ipairs(DIRECTIONS) do
+				if stopped() then
+					return "stopped"
+				end
+				if not isBorder(originX, originY, key) then
+					local moved = moveSteps(key, step)
+					if stopped() then
+						return "stopped"
+					end
+					if moved > 0 then
+						local pitch = waitForPitch(math.huge, true)
+						if not pitch then
+							return stopped() and "stopped" or "restart"
+						end
+						local newX, newY = readCoords()
+						if newX then
+							updateBest(pitch, newX, newY)
+							if not visited[posKey(newX, newY)] and pitch > currentPitch + PITCH_EPSILON then
+								if not candidate or pitch > candidate.pitch then
+									candidate = {
+										pitch = pitch,
+										x = newX,
+										y = newY,
+										key = key,
+										distance = moved,
+									}
+								end
+							end
+						end
+						if not navigateTo(originX, originY) then
+							return stopped() and "stopped" or "restart"
+						end
+					end
+				end
+			end
+
+			if candidate then
+				if not navigateTo(candidate.x, candidate.y) then
+					return stopped() and "stopped" or "restart"
+				end
+				local pitch = waitForPitch(math.huge, true)
+				if not pitch then
+					return stopped() and "stopped" or "restart"
+				end
+				currentPitch = pitch
+				recordBest(pitch)
+			elseif step > 1 then
+				step = math.max(1, math.floor(step / 2))
+			else
+				if bestX then
+					navigateTo(bestX, bestY)
+				end
+				return "done"
+			end
+		end
+	end
+
+	local function holdAtBest()
+		setStatus("Holding at best")
+		while not stopped() do
+			local pitch = waitForPitch(INACTIVITY_LIMIT, false)
+			if stopped() then
+				return
+			end
+			if not pitch then
+				return
+			end
+			if math.abs(pitch - bestPitch) > PITCH_EPSILON then
+				return
+			end
+			task.wait(0.25)
+		end
+	end
+
+	createSwitch(switchRow, false, function(value)
+		if value then
+			bestPitch = -math.huge
+			bestX, bestY = nil, nil
+			bestLabel.Text = "No measurement yet"
+			setStatus("Starting...")
+		else
+			setStatus("Off")
+		end
+		state.enabled = value
+	end)
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if state.enabled then
+				if not resolve() then
+					setStatus("Telescope not found")
+					task.wait(1)
+				elseif not fireclickdetector then
+					setStatus("fireclickdetector unavailable")
+					task.wait(1)
+				else
+					borders = {}
+					setStatus("Searching (approximate)")
+					local ok, err = pcall(function()
+						local mode = approximateSearch()
+						if mode == "precision" then
+							setStatus("Searching (precision)")
+							local result = precisionSearch()
+							if result == "done" then
+								holdAtBest()
+							end
+						end
+					end)
+					if not ok then
+						warn(err)
+						task.wait(0.5)
+					end
+				end
+			else
+				task.wait(0.25)
+			end
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		state.enabled = false
 	end)
 end)()
 
