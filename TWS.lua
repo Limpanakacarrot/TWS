@@ -2615,6 +2615,41 @@ end)()
 	local switchRow, statusLabel = createRow(planetPage, 38, "Auto telescope", "Off")
 	local bestRow, bestLabel = createRow(planetPage, 102, "Best found", "No measurement yet")
 
+		local constellationRow, constellationStatus = createRow(planetPage, 166, "Auto constellation quest", "Off")
+	local constellationState = { enabled = false, interval = 0.25 }
+
+	createSwitch(constellationRow, false, function(value)
+		constellationState.enabled = value
+		constellationStatus.Text = value and "Starting..." or "Off"
+	end)
+
+	local function getRadioDetector()
+		local planetarium = workspace:FindFirstChild("Planetarium")
+		local radio = planetarium and planetarium:FindFirstChild("Radio")
+		return radio and radio:FindFirstChild("ClickDetector")
+	end
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if constellationState.enabled then
+				local detector = getRadioDetector()
+				if not detector then
+					constellationStatus.Text = "Radio not found"
+				elseif not fireclickdetector then
+					constellationStatus.Text = "fireclickdetector unavailable"
+				else
+					fireclickdetector(detector)
+					constellationStatus.Text = "Clicking radio"
+				end
+			end
+			task.wait(constellationState.interval)
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		constellationState.enabled = false
+	end)
+
 	local lastStatus
 	local function setStatus(text)
 		if lastStatus ~= text then
