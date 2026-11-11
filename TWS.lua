@@ -1727,6 +1727,165 @@ end)
 end)()
 
 ;(function()
+	local state = { enabled = false, name = nil }
+
+	local equipRow, equipStatus = createRow(boxPage, 166, "Auto equip", "Off")
+	local equipDropdown = createValueButton(equipRow, "Choose tool" .. CHEVRON_DOWN, 190)
+	equipDropdown.Position = UDim2.new(1, -(190 + 86), 0.5, -19)
+	equipDropdown.TextTruncate = Enum.TextTruncate.AtEnd
+	local equipList = createDropdownList(boxPage, 228)
+	local dropdownOpen = false
+
+	local lastStatus
+	local function setStatus(text)
+		if lastStatus ~= text then
+			lastStatus = text
+			equipStatus.Text = text
+		end
+	end
+
+	local function updateDropdownText()
+		local label = state.name or "Choose tool"
+		equipDropdown.Text = label .. (dropdownOpen and CHEVRON_UP or CHEVRON_DOWN)
+	end
+
+	local function setDropdownOpen(open)
+		dropdownOpen = open
+		animate(equipList, 0.22, { Size = UDim2.fromOffset(704, open and 100 or 0) })
+		updateDropdownText()
+	end
+
+	local latestTools = {}
+
+	local function rebuildOptions(tools)
+		latestTools = tools
+		for _, child in ipairs(equipList:GetChildren()) do
+			if child:IsA("GuiButton") or child:IsA("TextLabel") then
+				child:Destroy()
+			end
+		end
+
+		-- unique tool names (selection is by name so it survives the tool being re-added)
+		local names, seen = {}, {}
+		for _, tool in ipairs(tools) do
+			if not seen[tool.Name] then
+				seen[tool.Name] = true
+				table.insert(names, tool.Name)
+			end
+		end
+
+		if #names == 0 then
+			make("TextLabel", equipList, {
+				Size = UDim2.new(1, -12, 0, 30),
+				BackgroundTransparency = 1,
+				Text = "No tools in inventory",
+				TextColor3 = MUTED,
+				Font = Enum.Font.Gotham,
+				TextSize = 11,
+				ZIndex = 9,
+			})
+			equipList.CanvasSize = UDim2.new(0, 0, 0, 40)
+			updateDropdownText()
+			return
+		end
+
+		for index, name in ipairs(names) do
+			local isSelected = state.name == name
+			local row = make("TextButton", equipList, {
+				LayoutOrder = index,
+				Size = UDim2.new(1, -4, 0, 31),
+				BackgroundColor3 = isSelected and ACTIVE_GREEN or ROW,
+				BorderSizePixel = 0,
+				Text = "",
+				AutoButtonColor = false,
+				ZIndex = 9,
+			})
+			addCorner(row, 7)
+			make("TextLabel", row, {
+				Position = UDim2.fromOffset(14, 0),
+				Size = UDim2.new(1, -112, 1, 0),
+				BackgroundTransparency = 1,
+				Text = name,
+				TextColor3 = isSelected and Color3.fromRGB(210, 239, 216) or Color3.fromRGB(222, 222, 224),
+				Font = Enum.Font.Gotham,
+				TextSize = 11,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 10,
+			})
+			make("TextLabel", row, {
+				Position = UDim2.new(1, -92, 0, 0),
+				Size = UDim2.fromOffset(78, 31),
+				BackgroundTransparency = 1,
+				Text = isSelected and "SELECTED" or "",
+				TextColor3 = Color3.fromRGB(198, 232, 205),
+				Font = Enum.Font.GothamBold,
+				TextSize = 9,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				ZIndex = 10,
+			})
+			row.Activated:Connect(function()
+				state.name = name
+				setDropdownOpen(false)
+				scheduleToolRefresh()
+			end)
+			addHover(row, isSelected and ACTIVE_GREEN or ROW, isSelected and Color3.fromRGB(49, 87, 65) or ROW_HOVER)
+		end
+		equipList.CanvasSize = UDim2.new(0, 0, 0, #names * 35 + 10)
+		updateDropdownText()
+	end
+
+	-- hook into the shared tool refresh (same pattern as fishing/mopping)
+	local baseRefreshTools = refreshTools
+	refreshTools = function()
+		baseRefreshTools()
+		local tools = collectTools()
+		rebuildOptions(tools)
+	end
+
+	equipDropdown.Activated:Connect(function()
+		setDropdownOpen(not dropdownOpen)
+	end)
+
+	createSwitch(equipRow, false, function(value)
+		state.enabled = value
+		setStatus(value and (state.name and "Starting..." or "Choose a tool") or "Off")
+	end)
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if state.enabled then
+				if not state.name then
+					setStatus("Choose a tool")
+				else
+					local character = player.Character
+					local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+					local backpack = player:FindFirstChildOfClass("Backpack")
+					local equipped = character and character:FindFirstChild(state.name)
+					if not (character and humanoid) or humanoid.Health <= 0 then
+						setStatus("Waiting for character...")
+					elseif equipped and equipped:IsA("Tool") then
+						setStatus("Equipped " .. state.name)
+					else
+						local tool = backpack and backpack:FindFirstChild(state.name)
+						if tool and tool:IsA("Tool") then
+							setStatus("Equipping " .. state.name .. "...")
+							humanoid:EquipTool(tool)
+						else
+							setStatus("Waiting for " .. state.name)
+						end
+					end
+				end
+			end
+			task.wait(0.25)
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		state.enabled = false
+	end)
+end)()
+
+;(function()
 	local questRow, questStatus = createRow(minePage, 192, "Auto mine quest", "Off")
 	local questState = { enabled = false, interval = 0.25 }
 
