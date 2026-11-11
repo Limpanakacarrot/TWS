@@ -282,6 +282,7 @@ local tabSpecs = {
 	{ id = "fishing", label = "FISHING" },
 	{ id = "mopping", label = "MOPPING" },
     { id = "planetarium", label = "PLANETARIUM" },
+	{ id = "background", label = "BACKGROUND" },
 	{ id = "settings", label = "SETTINGS" },
 	{ id = "credits", label = "CREDITS" },
 }
@@ -289,9 +290,9 @@ local pages = {}
 local tabButtons = {}
 local TAB_IDLE = Color3.fromRGB(140, 140, 145)
 local PAGE_Y = 118
-local TAB_PITCH = 100
-local TAB_WIDTH = 96
-local INDICATOR_WIDTH = 60
+local TAB_PITCH = 88
+local TAB_WIDTH = 84
+local INDICATOR_WIDTH = 50
 local INDICATOR_INSET = (TAB_WIDTH - INDICATOR_WIDTH) / 2
 
 local tabIndicator = make("Frame", tabBar, {
@@ -3099,6 +3100,135 @@ local function disconnectAll(connections)
 	end
 	table.clear(connections)
 end
+
+;(function()
+	local bgPage = pages.background
+	local INTERVAL = 0.25
+
+	local function findPath(root, ...)
+		local current = root
+		for _, name in ipairs({ ... }) do
+			current = current and current:FindFirstChild(name)
+		end
+		return current
+	end
+
+	local function fire(detector)
+		if detector and fireclickdetector then
+			pcall(fireclickdetector, detector)
+		end
+	end
+
+	local newCardRow, newCardStatus = createRow(bgPage, 0, "Auto new card", "Off")
+	local refreshCardRow, refreshCardStatus = createRow(bgPage, 64, "Auto refresh card", "Off")
+	local walletRow, walletStatus = createRow(bgPage, 128, "Auto pickup wallets", "Off")
+
+	local newCardState = { enabled = false }
+	local refreshCardState = { enabled = false }
+	local walletState = { enabled = false }
+
+	createSwitch(newCardRow, false, function(value)
+		newCardState.enabled = value
+		newCardStatus.Text = value and "Starting..." or "Off"
+	end)
+	createSwitch(refreshCardRow, false, function(value)
+		refreshCardState.enabled = value
+		refreshCardStatus.Text = value and "Starting..." or "Off"
+	end)
+	createSwitch(walletRow, false, function(value)
+		walletState.enabled = value
+		walletStatus.Text = value and "Starting..." or "Off"
+	end)
+
+	-- generic click loop for the two card buttons
+	local function startClickLoop(state, statusLabel, getDetector, foundText, missingText)
+		task.spawn(function()
+			while gui.Parent == playerGui do
+				if state.enabled then
+					local detector = getDetector()
+					if not detector then
+						statusLabel.Text = missingText
+					elseif not fireclickdetector then
+						statusLabel.Text = "fireclickdetector unavailable"
+					else
+						fire(detector)
+						statusLabel.Text = foundText
+					end
+				end
+				task.wait(INTERVAL)
+			end
+		end)
+	end
+
+	startClickLoop(newCardState, newCardStatus, function()
+		return findPath(workspace, "npc_becuz_why_not", "office1", "Hitbox", "ClickDetector")
+	end, "Clicking new card", "New card button not found")
+
+	startClickLoop(refreshCardState, refreshCardStatus, function()
+		return findPath(workspace, "npc_becuz_why_not", "office2", "Hitbox", "ClickDetector")
+	end, "Clicking refresh card", "Refresh card button not found")
+
+	-- wallets: instant pickup on ChildAdded + periodic sweep as a fallback
+	local function getWalletFolder()
+		return findPath(workspace, "Puddles", "Puddles2ElectricBoogaloo")
+	end
+
+	local function pickupObject(object)
+		local detector = object:FindFirstChildOfClass("ClickDetector")
+		if not detector then
+			detector = object:WaitForChild("ClickDetector", 2)
+		end
+		if detector and walletState.enabled then
+			fire(detector)
+		end
+	end
+
+	local walletConnection
+	local connectedFolder
+
+	task.spawn(function()
+		while gui.Parent == playerGui do
+			if walletState.enabled then
+				local folder = getWalletFolder()
+				if not folder then
+					walletStatus.Text = "Wallet folder not found"
+				elseif not fireclickdetector then
+					walletStatus.Text = "fireclickdetector unavailable"
+				else
+					if folder ~= connectedFolder then
+						if walletConnection then
+							walletConnection:Disconnect()
+						end
+						connectedFolder = folder
+						walletConnection = folder.ChildAdded:Connect(function(object)
+							task.spawn(pickupObject, object)
+						end)
+					end
+					local count = 0
+					for _, object in ipairs(folder:GetChildren()) do
+						local detector = object:FindFirstChildOfClass("ClickDetector")
+						if detector then
+							fire(detector)
+							count += 1
+						end
+					end
+					walletStatus.Text = count > 0 and string.format("Picking up %d wallet(s)", count) or "Waiting for wallets"
+				end
+			end
+			task.wait(INTERVAL)
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		newCardState.enabled = false
+		refreshCardState.enabled = false
+		walletState.enabled = false
+		if walletConnection then
+			walletConnection:Disconnect()
+			walletConnection = nil
+		end
+	end)
+end)()
 
 local function bindBackpack(backpack)
 	disconnectAll(backpackConnections)
