@@ -1931,8 +1931,8 @@ end)()
 	local fishSwitchRow, fishStatus = createRow(fishPage, 38, "Auto fish", "Off")
 	local rodRow = createRow(fishPage, 102, "Rod")
 	local rodButton = createValueButton(rodRow, "No rod selected" .. CHEVRON_DOWN, 265)
-	local questRow, questStatus = createRow(fishPage, 166, "Auto fishing quest", "Off")
 	local teleportRow = createRow(fishPage, 230, "Teleports", "Pond and shop")
+	local questRow, questStatus = createRow(fishPage, 166, "Auto fishing quest", "Off")
 	local rodList = createDropdownList(fishPage, 164)
 	local rodDropdownOpen = false
 
@@ -1950,10 +1950,45 @@ end)()
 		ZIndex = 9,
 	})
 
-	local CAST_CFRAME = CFrame.new(
-		-48.541969299316406, 742.702392578125, 193.20567321777344,
-		1, 0, 0, 0, 1, 0, 0, 0, 1
-	)
+	local function cast(x, y, z)
+		return CFrame.new(x, y, z, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+	end
+
+	local LOCATIONS = {
+		{
+			name = "Normal pond",
+			position = Vector3.new(-43, 748, 203),
+			cast = cast(-45.794429779052734, 742.702392578125, 204.17762756347656),
+			water = { "SkyIsland", "CloudsWater" },
+		},
+		{
+			name = "Sky",
+			position = Vector3.new(113, 905, 274),
+			cast = cast(114.66998291015625, 901.9917602539062, 275.0465393066406),
+			water = { "SkyIsland", "Ground", "CloudsWater" },
+		},
+		{
+			name = "Lava",
+			position = Vector3.new(-10, -283, 17),
+			cast = cast(-10.903992652893066, -288.572509765625, 18.689739227294922),
+			water = { "Sewers", "LavaWater" },
+		},
+		{
+			name = "Sewer",
+			position = Vector3.new(-4, -223, -9),
+			cast = cast(-3.5957908630371094, -226.57249450683594, -6.208518981933594),
+			water = { "Sewers", "SewageWater", "SewerWater" },
+		},
+	}
+	fishState.location = LOCATIONS[1]
+
+	local function findWater(path)
+		local current = workspace
+		for _, name in ipairs(path) do
+			current = current and current:FindFirstChild(name)
+		end
+		return current
+	end
 	local LOOP_INTERVAL = 0.1
 	local CAST_INTERVAL = 0.5
 	local CLICK_HOLD = 0.03
@@ -1978,6 +2013,9 @@ end)()
 	local function setRodDropdownOpen(open)
 		rodDropdownOpen = open
 		animate(rodList, 0.22, { Size = UDim2.fromOffset(704, open and 100 or 0) })
+		if open and setLocationOpen then
+			setLocationOpen(false)
+		end
 		updateRodText()
 	end
 
@@ -2101,6 +2139,7 @@ end)()
 
 	createSwitch(fishSwitchRow, false, function(value)
 		fishState.enabled = value
+		fishState.pendingTeleport = value
 		if value then
 			installHook()
 			setStatus("Starting...")
@@ -2128,7 +2167,82 @@ end)()
 			teleportTo(x, y, z)
 		end)
 	end
-	addTeleportButton(220, "POND", -41, 748, 193)
+		local locationButton = createValueButton(teleportRow, "", 190)
+	locationButton.Position = UDim2.new(1, -(190 + 12 + 100 + 10), 0.5, -19)
+	local locationList = createDropdownList(fishPage, 228)
+	local locationOpen = false
+
+	local function updateLocationText()
+		locationButton.Text = fishState.location.name .. (locationOpen and CHEVRON_UP or CHEVRON_DOWN)
+	end
+
+	local function rebuildLocationOptions()
+		for _, child in ipairs(locationList:GetChildren()) do
+			if child:IsA("GuiButton") then
+				child:Destroy()
+			end
+		end
+		for index, location in ipairs(LOCATIONS) do
+			local isSelected = fishState.location == location
+			local row = make("TextButton", locationList, {
+				LayoutOrder = index,
+				Size = UDim2.new(1, -4, 0, 31),
+				BackgroundColor3 = isSelected and ACTIVE_GREEN or ROW,
+				BorderSizePixel = 0,
+				Text = "",
+				AutoButtonColor = false,
+				ZIndex = 9,
+			})
+			addCorner(row, 7)
+			make("TextLabel", row, {
+				Position = UDim2.fromOffset(14, 0),
+				Size = UDim2.new(1, -112, 1, 0),
+				BackgroundTransparency = 1,
+				Text = location.name,
+				TextColor3 = isSelected and Color3.fromRGB(210, 239, 216) or Color3.fromRGB(222, 222, 224),
+				Font = Enum.Font.Gotham,
+				TextSize = 11,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 10,
+			})
+			make("TextLabel", row, {
+				Position = UDim2.new(1, -92, 0, 0),
+				Size = UDim2.fromOffset(78, 31),
+				BackgroundTransparency = 1,
+				Text = isSelected and "SELECTED" or "",
+				TextColor3 = Color3.fromRGB(198, 232, 205),
+				Font = Enum.Font.GothamBold,
+				TextSize = 9,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				ZIndex = 10,
+			})
+			row.Activated:Connect(function()
+				fishState.location = location
+				if fishState.enabled then
+					fishState.pendingTeleport = true
+				end
+				setLocationOpen(false)
+				rebuildLocationOptions()
+			end)
+			addHover(row, isSelected and ACTIVE_GREEN or ROW, isSelected and Color3.fromRGB(49, 87, 65) or ROW_HOVER)
+		end
+		locationList.CanvasSize = UDim2.new(0, 0, 0, #LOCATIONS * 35 + 10)
+		updateLocationText()
+	end
+
+	setLocationOpen = function(open)
+		locationOpen = open
+		animate(locationList, 0.22, { Size = UDim2.fromOffset(704, open and 120 or 0) })
+		if open then
+			setRodDropdownOpen(false)
+		end
+		updateLocationText()
+	end
+
+	locationButton.Activated:Connect(function()
+		setLocationOpen(not locationOpen)
+	end)
+	rebuildLocationOptions()
 	addTeleportButton(112, "SHOP", 37, 756, 348)
 
 	local questState = { enabled = false, interval = 0.25 }
@@ -2213,6 +2327,7 @@ end)()
 
 	task.spawn(function()
 		local lastRod
+		local lastLocation
 		local remote
 		local water
 		local lastCast = 0
@@ -2228,6 +2343,20 @@ end)()
 					lastRod = rod
 					remote = nil
 					fishRemote = nil
+				end
+				
+				local location = fishState.location
+				if location ~= lastLocation then
+					lastLocation = location
+					water = nil
+				end
+
+				local root = character and character:FindFirstChild("HumanoidRootPart")
+				if fishState.pendingTeleport and root then
+					fishState.pendingTeleport = false
+					root.CFrame = CFrame.new(location.position)
+					root.AssemblyLinearVelocity = Vector3.zero
+					task.wait(0.5)
 				end
 
 				if not (character and humanoid) then
@@ -2246,8 +2375,7 @@ end)()
 						fishRemote = remote
 					end
 					if not (water and water.Parent) then
-						local sky = workspace:FindFirstChild("SkyIsland")
-						water = sky and sky:FindFirstChild("CloudsWater")
+						water = findWater(location.water)
 					end
 
 					if not remote then
@@ -2258,7 +2386,7 @@ end)()
 						local now = os.clock()
 						if now - lastCast >= CAST_INTERVAL then
 							lastCast = now
-							remote:FireServer("Cast", CAST_CFRAME, water)
+							remote:FireServer("Cast", location.cast, water)
 						end
 						pcall(click)
 						setStatus(hookFailed and "Fishing (catch hook unavailable)" or "Fishing")
