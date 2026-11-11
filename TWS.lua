@@ -3168,6 +3168,18 @@ end
 		return findPath(workspace, "npc_becuz_why_not", "office2", "Hitbox", "ClickDetector")
 	end, "Clicking refresh card", "Refresh card button not found")
 
+	local rainbowRow, rainbowStatus = createRow(bgPage, 192, "Auto rainbow box", "Off")
+	local rainbowState = { enabled = false }
+
+	createSwitch(rainbowRow, false, function(value)
+		rainbowState.enabled = value
+		rainbowStatus.Text = value and "Starting..." or "Off"
+	end)
+
+	startClickLoop(rainbowState, rainbowStatus, function()
+		return findPath(workspace, "RainbowBox", "ClickDetector")
+	end, "Clicking rainbow box", "Waiting for rainbow box")
+
 	-- wallets: instant pickup on ChildAdded + periodic sweep as a fallback
 	local function getWalletFolder()
 		return findPath(workspace, "Puddles", "Puddles2ElectricBoogaloo")
@@ -3223,6 +3235,7 @@ end
 		newCardState.enabled = false
 		refreshCardState.enabled = false
 		walletState.enabled = false
+		rainbowState.enabled = false
 		if walletConnection then
 			walletConnection:Disconnect()
 			walletConnection = nil
