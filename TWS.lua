@@ -1979,6 +1979,12 @@ end)()
 			cast = cast(-3.5957908630371094, -226.57249450683594, -6.208518981933594),
 			water = { "Sewers", "SewageWater", "SewerWater" },
 		},
+				{
+			name = "Cave",
+			position = Vector3.new(915, 1248, -459),
+			cast = cast(915.5115356445312, 1243.9998779296875, -459.937255859375),
+			water = { "Frozen Island", "cave thing", "FrozenWater" },
+		},
 	}
 	fishState.location = LOCATIONS[1]
 
@@ -2012,7 +2018,7 @@ end)()
 
 	local function setRodDropdownOpen(open)
 		rodDropdownOpen = open
-		animate(rodList, 0.22, { Size = UDim2.fromOffset(704, open and 100 or 0) })
+		animate(locationList, 0.22, { Size = UDim2.fromOffset(704, open and 150 or 0) })
 		if open and setLocationOpen then
 			setLocationOpen(false)
 		end
