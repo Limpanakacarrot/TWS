@@ -2,6 +2,48 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
+local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
+
+local SAVE_FILE = "FrozenIslandToolsUI.json"
+local config = HttpService:JSONDecode("{}")
+
+if isfile and readfile then
+	pcall(function()
+		if isfile(SAVE_FILE) then
+			local data = HttpService:JSONDecode(readfile(SAVE_FILE))
+			if type(data) == "table" then
+				config = data
+			end
+		end
+	end)
+end
+
+local saveQueued = false
+local function saveSettings()
+	if saveQueued then
+		return
+	end
+	saveQueued = true
+	task.delay(0.5, function()
+		saveQueued = false
+		if writefile then
+			pcall(function()
+				writefile(SAVE_FILE, HttpService:JSONEncode(config))
+			end)
+		end
+	end)
+end
+
+local function pickByName(tools, name)
+	for _, tool in ipairs(tools) do
+		if tool.Name == name then
+			return tool
+		end
+	end
+	return nil
+end
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local blocksFolder = workspace:WaitForChild("FrozenIsland_Blocks")
@@ -13,6 +55,13 @@ end
 
 local excludedHex = Color3.fromRGB(99, 95, 98):ToHex():upper()
 local enabledColors = {}
+
+if type(config.colors) == "table" then
+	for _, hex in ipairs(config.colors) do
+		enabledColors[hex] = true
+	end
+end
+
 local highlightingEnabled = false
 local autoMineEnabled = false
 local autoTeleportEnabled = false
@@ -21,6 +70,16 @@ local selectedTool
 local mineGeneration = 0
 local boxGeneration = 0
 local toggleKey = Enum.KeyCode.R
+
+if config.toggleKey then
+	local ok, key = pcall(function()
+		return Enum.KeyCode[config.toggleKey]
+	end)
+	if ok and key then
+		toggleKey = key
+	end
+end
+
 local waitingForKey = false
 local uiVisible = true
 local visibilityGeneration = 0
@@ -90,6 +149,8 @@ local function applyAccent(color)
 	for _, update in ipairs(themeUpdaters) do
 		update()
 	end
+	config.accent = color:ToHex()
+	saveSettings()
 end
 
 local function make(className, parent, properties)
@@ -284,7 +345,6 @@ local tabSpecs = {
     { id = "planetarium", label = "PLANETARIUM" },
 	{ id = "background", label = "BACKGROUND" },
 	{ id = "settings", label = "SETTINGS" },
-	{ id = "credits", label = "CREDITS" },
 }
 local pages = {}
 local tabButtons = {}
@@ -791,6 +851,9 @@ local function rebuildGotoOptions(entries)
 		})
 		row.Activated:Connect(function()
 			gotoSelected = { hex = entry.hex, name = entry.name }
+			config.gotoHex = entry.hex
+			config.gotoName = entry.name
+			saveSettings()
 			gotoStatus.Text = entry.name .. " selected"
 			setGotoDropdownOpen(false)
 			task.defer(function()
@@ -809,8 +872,7 @@ gotoDropdown.Activated:Connect(function()
 	setGotoDropdownOpen(not gotoDropdownOpen)
 end)
 
-local countsPage = subPages.counts
-local countsList = createDropdownList(countsPage, 0)
+local countsList = createDropdownList(subPages.counts, 0)
 countsList.Size = UDim2.fromOffset(704, 296)
 countsList.AutomaticCanvasSize = Enum.AutomaticSize.Y
 countsList.CanvasSize = UDim2.new(0, 0, 0, 0)
@@ -998,10 +1060,14 @@ mineTeleport.Activated:Connect(function()
 	teleportTo(949, 1183, -464)
 end)
 
+local settingsStatus, keyButton
+
+do
 local settingsPage = pages.settings
 
-local keyRow, settingsStatus = createRow(settingsPage, 0, "Toggle key", "Press the key to show or hide this UI")
-local keyButton = createValueButton(keyRow, toggleKey.Name, 155)
+local keyRow
+keyRow, settingsStatus = createRow(settingsPage, 0, "Toggle key", "Press the key to show or hide this UI")
+keyButton = createValueButton(keyRow, toggleKey.Name, 155)
 
 keyButton.Activated:Connect(function()
 	waitingForKey = true
@@ -1035,7 +1101,7 @@ for index, presetColor in ipairs(ACCENT_PRESETS) do
 	addCorner(swatch, SWATCH_SIZE / 2)
 	local stroke = addStroke(swatch, WHITE, 0.7)
 	table.insert(themeUpdaters, function()
-		local selected = ACCENT == presetColor
+		local selected = ACCENT:ToHex() == presetColor:ToHex()
 		stroke.Transparency = selected and 0 or 0.7
 		stroke.Thickness = selected and 2 or 1
 	end)
@@ -1095,20 +1161,46 @@ table.insert(themeUpdaters, function()
 	hexBox.Text = "#" .. ACCENT:ToHex():upper()
 end)
 
-applyAccent(ACCENT)
+local okAccent, savedAccent = false, nil
+if config.accent then
+	okAccent, savedAccent = pcall(Color3.fromHex, config.accent)
+end
+applyAccent(okAccent and typeof(savedAccent) == "Color3" and savedAccent or ACCENT)
 
-local creditsPage = pages.credits
-local creditRow = createRow(creditsPage, 0, "Credits", "UI and script")
-make("TextLabel", creditRow, {
-	Position = UDim2.new(1, -220, 0, 0),
-	Size = UDim2.fromOffset(190, 56),
-	BackgroundTransparency = 1,
-	Text = "Limpan",
-	TextColor3 = Color3.fromRGB(230, 230, 232),
-	Font = Enum.Font.GothamMedium,
-	TextSize = 13,
-	TextXAlignment = Enum.TextXAlignment.Right,
+local LINK = "https://guns.lol/Limpan"
+local creditRow, creditStatus = createRow(settingsPage, 192, "Credits", "UI and script by Limpan")
+local linkButton = make("TextButton", creditRow, {
+	Position = UDim2.new(1, -(150 + 12), 0.5, -19),
+	Size = UDim2.fromOffset(150, 38),
+	BackgroundColor3 = Color3.fromRGB(40, 38, 40),
+	BorderSizePixel = 0,
+	Text = "guns.lol/Limpan",
+	TextColor3 = Color3.fromRGB(228, 228, 230),
+	Font = Enum.Font.GothamBold,
+	TextSize = 11,
+	AutoButtonColor = false,
 })
+addCorner(linkButton, 8)
+addStroke(linkButton, OUTLINE, 0.2)
+addHover(linkButton, Color3.fromRGB(40, 38, 40), mutedRed)
+
+linkButton.Activated:Connect(function()
+	local opened = pcall(function()
+		GuiService:OpenBrowserWindow(LINK)
+	end)
+	local copied = false
+	if setclipboard then
+		copied = pcall(setclipboard, LINK)
+	end
+	if copied then
+		creditStatus.Text = "Link copied to clipboard"
+	elseif opened then
+		creditStatus.Text = "Opening link..."
+	else
+		creditStatus.Text = LINK
+	end
+end)	
+end
 
 local dragging = false
 local dragStart
@@ -1179,6 +1271,8 @@ table.insert(globalConnections, UserInputService.InputBegan:Connect(function(inp
 	if waitingForKey then
 		if input.KeyCode ~= Enum.KeyCode.Unknown then
 			toggleKey = input.KeyCode
+			config.toggleKey = toggleKey.Name
+			saveSettings()
 			waitingForKey = false
 			keyButton.Text = toggleKey.Name
 			settingsStatus.Text = string.format("The %s key toggles this window", toggleKey.Name)
@@ -1292,6 +1386,12 @@ local function rebuildColorOptions(entries)
 			else
 				enabledColors[entry.hex] = true
 			end
+			local list = {}
+			for hex in pairs(enabledColors) do
+				table.insert(list, hex)
+			end
+			config.colors = list
+			saveSettings()
 			scheduleColorRefresh()
 		end)
 		addHover(row, isEnabled and ACTIVE_GREEN or ROW, isEnabled and Color3.fromRGB(49, 87, 65) or ROW_HOVER)
@@ -1566,6 +1666,8 @@ local function rebuildToolOptions(tools)
 				selectedTool = tool
 				mineGeneration += 1
 			end
+			config.mineTool = tool.Name
+			saveSettings()
 			setToolDropdownOpen(false)
 			scheduleToolRefresh()
 		end)
@@ -1589,6 +1691,13 @@ refreshTools = function()
 		selectedTool = nil
 		mineGeneration += 1
 	end
+
+	local preferred = config.mineTool and pickByName(tools, config.mineTool)
+	if preferred and (not selectedTool or selectedTool.Name ~= config.mineTool) then
+		selectedTool = preferred
+		mineGeneration += 1
+	end
+
 	if not selectedTool and #tools > 0 then
 		for _, tool in ipairs(tools) do
 			if tool.Name:lower():find("pickaxe", 1, true) then
@@ -1727,7 +1836,7 @@ end)
 end)()
 
 ;(function()
-	local state = { enabled = false, name = nil }
+	local state = { enabled = false, name = config.equipTool }
 
 	local equipRow, equipStatus = createRow(boxPage, 166, "Auto equip", "Off")
 	local equipDropdown = createValueButton(equipRow, "Choose tool" .. CHEVRON_DOWN, 190)
@@ -1755,10 +1864,7 @@ end)()
 		updateDropdownText()
 	end
 
-	local latestTools = {}
-
 	local function rebuildOptions(tools)
-		latestTools = tools
 		for _, child in ipairs(equipList:GetChildren()) do
 			if child:IsA("GuiButton") or child:IsA("TextLabel") then
 				child:Destroy()
@@ -1825,6 +1931,8 @@ end)()
 			})
 			row.Activated:Connect(function()
 				state.name = name
+				config.equipTool = name
+				saveSettings()
 				setDropdownOpen(false)
 				scheduleToolRefresh()
 			end)
@@ -1931,10 +2039,11 @@ end)()
 	local fishSwitchRow, fishStatus = createRow(fishPage, 38, "Auto fish", "Off")
 	local rodRow = createRow(fishPage, 102, "Rod")
 	local rodButton = createValueButton(rodRow, "No rod selected" .. CHEVRON_DOWN, 265)
-	local teleportRow = createRow(fishPage, 230, "Teleports", "Pond and shop")
-	local questRow, questStatus = createRow(fishPage, 166, "Auto fishing quest", "Off")
+	local teleportRow = createRow(fishPage, 166, "Fish location", "Teleports here when auto fish starts")
+	local questRow, questStatus = createRow(fishPage, 230, "Auto fishing quest", "Off")
 	local rodList = createDropdownList(fishPage, 164)
 	local rodDropdownOpen = false
+	local setLocationOpen
 
 	local caughtLabel = make("TextLabel", fishPage, {
 		Name = "FishesCaughtLabel",
@@ -1987,6 +2096,11 @@ end)()
 		},
 	}
 	fishState.location = LOCATIONS[1]
+	for _, location in ipairs(LOCATIONS) do
+		if location.name == config.fishLocation then
+			fishState.location = location
+		end
+	end
 
 	local function findWater(path)
 		local current = workspace
@@ -2018,7 +2132,7 @@ end)()
 
 	local function setRodDropdownOpen(open)
 		rodDropdownOpen = open
-		animate(locationList, 0.22, { Size = UDim2.fromOffset(704, open and 150 or 0) })
+		animate(rodList, 0.22, { Size = UDim2.fromOffset(704, open and 100 or 0) })
 		if open and setLocationOpen then
 			setLocationOpen(false)
 		end
@@ -2083,6 +2197,8 @@ end)()
 			})
 			row.Activated:Connect(function()
 				fishState.tool = tool
+				config.rod = tool.Name
+				saveSettings()
 				setRodDropdownOpen(false)
 				scheduleToolRefresh()
 			end)
@@ -2096,6 +2212,10 @@ end)()
 		local tools, seen = collectTools()
 		if fishState.tool and not seen[fishState.tool] then
 			fishState.tool = nil
+		end
+		local preferred = config.rod and pickByName(tools, config.rod)
+		if preferred and (not fishState.tool or fishState.tool.Name ~= config.rod) then
+			fishState.tool = preferred
 		end
 		if not fishState.tool then
 			for _, tool in ipairs(tools) do
@@ -2224,9 +2344,8 @@ end)()
 			})
 			row.Activated:Connect(function()
 				fishState.location = location
-				if fishState.enabled then
-					fishState.pendingTeleport = true
-				end
+				config.fishLocation = location.name
+				saveSettings()
 				setLocationOpen(false)
 				rebuildLocationOptions()
 			end)
@@ -2238,7 +2357,7 @@ end)()
 
 	setLocationOpen = function(open)
 		locationOpen = open
-		animate(locationList, 0.22, { Size = UDim2.fromOffset(704, open and 120 or 0) })
+		animate(locationList, 0.22, { Size = UDim2.fromOffset(704, open and 150 or 0) })
 		if open then
 			setRodDropdownOpen(false)
 		end
@@ -2512,6 +2631,8 @@ end)()
 			})
 			row.Activated:Connect(function()
 				state.tool = tool
+				config.mopTool = tool.Name
+				saveSettings()
 				setDropdownOpen(false)
 				scheduleToolRefresh()
 			end)
@@ -2525,6 +2646,10 @@ end)()
 		local tools, seen = collectTools()
 		if state.tool and not seen[state.tool] then
 			state.tool = nil
+		end
+		local preferred = config.mopTool and pickByName(tools, config.mopTool)
+		if preferred and (not state.tool or state.tool.Name ~= config.mopTool) then
+			state.tool = preferred
 		end
 		if not state.tool then
 			for _, tool in ipairs(tools) do
@@ -2907,7 +3032,7 @@ end)()
 	}
 
 	local switchRow, statusLabel = createRow(planetPage, 38, "Auto telescope", "Off")
-	local bestRow, bestLabel = createRow(planetPage, 102, "Best found", "No measurement yet")
+	local _bestRow, bestLabel = createRow(planetPage, 102, "Best found", "No measurement yet")
 
 		local constellationRow, constellationStatus = createRow(planetPage, 166, "Auto constellation quest", "Off")
 	local constellationState = { enabled = false, interval = 0.25 }
@@ -3592,6 +3717,23 @@ local function getTopOffset(block)
 	return 6
 end
 
+local function getTopPosition(block)
+	local cf, size
+	if block:IsA("BasePart") then
+		cf, size = block.CFrame, block.Size
+	elseif block:IsA("Model") then
+		cf, size = block:GetBoundingBox()
+	else
+		return nil
+	end
+	local halfHeight = (
+		math.abs(cf.RightVector.Y) * size.X
+		+ math.abs(cf.UpVector.Y) * size.Y
+		+ math.abs(cf.LookVector.Y) * size.Z
+	) / 2
+	return Vector3.new(cf.Position.X, cf.Position.Y + halfHeight + 3, cf.Position.Z)
+end	
+
 local function findClosestBlock(root)
 	local currentFolder = workspace:FindFirstChild("FrozenIsland_Blocks")
 	if not currentFolder then
@@ -3675,13 +3817,13 @@ task.spawn(function()
 				blockTeleportStatus.Text = "Waiting for character..."
 			else
 				local block = findClosestBlock(root)
-				local blockPosition = block and getPosition(block)
-				if not block or not blockPosition then
+				local topPosition = block and getTopPosition(block)
+				if not block or not topPosition then
 					blockTeleportStatus.Text = "No blocks found"
 				else
-					local offset = blockPosition - root.Position
+					local offset = topPosition - root.Position
 					if offset:Dot(offset) > TELEPORT_MIN_DISTANCE * TELEPORT_MIN_DISTANCE and autoTeleportEnabled then
-						root.CFrame = CFrame.new(blockPosition + Vector3.new(0, getTopOffset(block), 0))
+						root.CFrame = CFrame.new(topPosition)
 						root.AssemblyLinearVelocity = Vector3.zero
 					end
 					blockTeleportStatus.Text = "Teleporting to blocks"
@@ -3692,6 +3834,7 @@ task.spawn(function()
 	end
 end)
 
+do
 local function getBoxObjects()
 	local main = workspace:FindFirstChild("MainPlace")
 	local deliver = main and main:FindFirstChild("DELIVERtm")
@@ -3759,6 +3902,7 @@ task.spawn(function()
 		task.wait(0.25)
 	end
 end)
+end
 
 gotoButton.Activated:Connect(function()
 	local entry = gotoSelected
@@ -3790,7 +3934,7 @@ gotoButton.Activated:Connect(function()
 		gotoStatus.Text = string.format("No %s blocks found", entry.name)
 		return
 	end
-	root.CFrame = CFrame.new(closest.Position + Vector3.new(0, getTopOffset(closest), 0))
+	root.CFrame = CFrame.new(getTopPosition(closest) or (closest.Position + Vector3.new(0, getTopOffset(closest), 0)))
 	root.AssemblyLinearVelocity = Vector3.zero
 	gotoStatus.Text = "Teleported to " .. entry.name
 end)
@@ -3844,6 +3988,11 @@ end)
 
 table.insert(folderConnections, blocksFolder.DescendantAdded:Connect(scheduleColorRefresh))
 table.insert(folderConnections, blocksFolder.DescendantRemoving:Connect(scheduleColorRefresh))
+
+if config.gotoHex then
+	gotoSelected = { hex = config.gotoHex, name = config.gotoName or config.gotoHex }
+	gotoStatus.Text = gotoSelected.name .. " selected"
+end
 
 refreshColors()
 refreshTools()
