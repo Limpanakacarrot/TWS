@@ -343,6 +343,7 @@ local tabSpecs = {
 	{ id = "fishing", label = "FISHING" },
 	{ id = "mopping", label = "MOPPING" },
     { id = "planetarium", label = "PLANETARIUM" },
+	{ id = "character", label = "CHARACTER" },
 	{ id = "background", label = "BACKGROUND" },
 	{ id = "settings", label = "SETTINGS" },
 }
@@ -3564,6 +3565,389 @@ end
 			walletConnection:Disconnect()
 			walletConnection = nil
 		end
+	end)
+end)()
+
+;(function()
+	local RunService = game:GetService("RunService")
+	local charPage = pages.character
+
+	local state = {
+		infJump = false,
+		walk = false,
+		jump = false,
+		walkValue = tonumber(config.walkSpeed) or 50,
+		jumpValue = tonumber(config.jumpPower) or 100,
+	}
+
+	local WALK_MIN, WALK_MAX = 0, 300
+	local JUMP_MIN, JUMP_MAX = 0, 500
+
+	-- slider with a typeable value box; returns a setter
+	local function createSlider(row, minValue, maxValue, initial, onChanged)
+		local SLIDER_WIDTH = 240
+		local value = initial
+
+		local box = make("TextBox", row, {
+			Position = UDim2.new(1, -(76 + 20 + SLIDER_WIDTH + 10 + 56), 0.5, -15),
+			Size = UDim2.fromOffset(56, 30),
+			BackgroundColor3 = Color3.fromRGB(32, 32, 34),
+			BorderSizePixel = 0,
+			Text = tostring(initial),
+			TextColor3 = Color3.fromRGB(200, 200, 204),
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			ClearTextOnFocus = false,
+		})
+		addCorner(box, 8)
+		addStroke(box, Color3.fromRGB(70, 70, 73), 0.25)
+
+		local track = make("Frame", row, {
+			Position = UDim2.new(1, -(76 + 20 + SLIDER_WIDTH), 0.5, -3),
+			Size = UDim2.fromOffset(SLIDER_WIDTH, 6),
+			BackgroundColor3 = OFF_TRACK,
+			BorderSizePixel = 0,
+		})
+		addCorner(track, 3)
+
+		local fill = make("Frame", track, {
+			Size = UDim2.fromScale(0, 1),
+			BackgroundColor3 = ACCENT,
+			BorderSizePixel = 0,
+		})
+		addCorner(fill, 3)
+
+		local knob = make("Frame", track, {
+			Size = UDim2.fromOffset(16, 16),
+			Position = UDim2.new(0, -8, 0.5, -8),
+			BackgroundColor3 = ON_KNOB,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		})
+		addCorner(knob, 8)
+
+		table.insert(themeUpdaters, function()
+			fill.BackgroundColor3 = ACCENT
+		end)
+
+		local hit = make("Frame", row, {
+			Position = UDim2.new(1, -(76 + 20 + SLIDER_WIDTH + 8), 0.5, -14),
+			Size = UDim2.fromOffset(SLIDER_WIDTH + 16, 28),
+			BackgroundTransparency = 1,
+			Active = true,
+			ZIndex = 3,
+		})
+
+		local function setValue(newValue, silent)
+			newValue = math.clamp(math.floor(newValue + 0.5), minValue, maxValue)
+			value = newValue
+			local alpha = (newValue - minValue) / (maxValue - minValue)
+			fill.Size = UDim2.fromScale(alpha, 1)
+			knob.Position = UDim2.new(alpha, -8, 0.5, -8)
+			box.Text = tostring(newValue)
+			if not silent and onChanged then
+				onChanged(newValue)
+			end
+		end
+
+		local function setFromX(x)
+			local alpha = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+			setValue(minValue + alpha * (maxValue - minValue))
+		end
+
+		local dragging = false
+		hit.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				setFromX(input.Position.X)
+			end
+		end)
+		table.insert(globalConnections, UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				setFromX(input.Position.X)
+			end
+		end))
+		table.insert(globalConnections, UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
+			end
+		end))
+
+		box.FocusLost:Connect(function()
+			local typed = tonumber(box.Text)
+			if typed then
+				setValue(typed)
+			else
+				box.Text = tostring(value)
+			end
+		end)
+
+		setValue(initial, true)
+		return setValue
+	end
+
+	-- humanoid tracking / enforcement
+	local humanoid
+	local humanoidConnections = {}
+	local original = {}
+
+	local function currentHumanoid()
+		local character = player.Character
+		return character and character:FindFirstChildOfClass("Humanoid")
+	end
+
+	local function enforce()
+		local h = humanoid
+		if not h or not h.Parent then
+			return
+		end
+		if state.walk and h.WalkSpeed ~= state.walkValue then
+			h.WalkSpeed = state.walkValue
+		end
+		if state.jump then
+			if not h.UseJumpPower then
+				h.UseJumpPower = true
+			end
+			if h.JumpPower ~= state.jumpValue then
+				h.JumpPower = state.jumpValue
+			end
+		end
+	end
+
+	local function bindHumanoid(h)
+		disconnectAll(humanoidConnections)
+		humanoid = h
+		original = {}
+		if not h then
+			return
+		end
+		original.walk = h.WalkSpeed
+		original.jumpPower = h.JumpPower
+		original.useJumpPower = h.UseJumpPower
+
+		-- instant revert if the game (or anything else) changes them
+		table.insert(humanoidConnections, h:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+			if state.walk and h.WalkSpeed ~= state.walkValue then
+				h.WalkSpeed = state.walkValue
+			end
+		end))
+		table.insert(humanoidConnections, h:GetPropertyChangedSignal("JumpPower"):Connect(function()
+			if state.jump and h.JumpPower ~= state.jumpValue then
+				h.JumpPower = state.jumpValue
+			end
+		end))
+		table.insert(humanoidConnections, h:GetPropertyChangedSignal("UseJumpPower"):Connect(function()
+			if state.jump and not h.UseJumpPower then
+				h.UseJumpPower = true
+			end
+		end))
+		enforce()
+	end
+
+	local function restoreWalk()
+		if humanoid and humanoid.Parent and original.walk then
+			humanoid.WalkSpeed = original.walk
+		end
+	end
+
+	local function restoreJump()
+		if humanoid and humanoid.Parent and original.jumpPower then
+			humanoid.JumpPower = original.jumpPower
+			humanoid.UseJumpPower = original.useJumpPower
+		end
+	end
+
+	-- rows
+	local infRow, infStatus = createRow(charPage, 0, "Infinite jump", "Off")
+	local walkRow, walkStatus = createRow(charPage, 64, "Walk speed", "Off")
+	local jumpRow, jumpStatus = createRow(charPage, 128, "Jump power", "Off")
+
+	createSwitch(infRow, false, function(value)
+		state.infJump = value
+		infStatus.Text = value and "Jump in mid-air" or "Off"
+	end)
+
+	createSwitch(walkRow, false, function(value)
+		state.walk = value
+		if value then
+			walkStatus.Text = "Locked at " .. state.walkValue
+			enforce()
+		else
+			walkStatus.Text = "Off"
+			restoreWalk()
+		end
+	end)
+
+	createSwitch(jumpRow, false, function(value)
+		state.jump = value
+		if value then
+			jumpStatus.Text = "Locked at " .. state.jumpValue
+			enforce()
+		else
+			jumpStatus.Text = "Off"
+			restoreJump()
+		end
+	end)
+
+	createSlider(walkRow, WALK_MIN, WALK_MAX, math.clamp(state.walkValue, WALK_MIN, WALK_MAX), function(newValue)
+		state.walkValue = newValue
+		config.walkSpeed = newValue
+		saveSettings()
+		if state.walk then
+			walkStatus.Text = "Locked at " .. newValue
+			enforce()
+		end
+	end)
+
+	createSlider(jumpRow, JUMP_MIN, JUMP_MAX, math.clamp(state.jumpValue, JUMP_MIN, JUMP_MAX), function(newValue)
+		state.jumpValue = newValue
+		config.jumpPower = newValue
+		saveSettings()
+		if state.jump then
+			jumpStatus.Text = "Locked at " .. newValue
+			enforce()
+		end
+	end)
+
+	-- teleport to player (name or display name, full or just the first letters)
+	local tpRow, tpStatus = createRow(charPage, 192, "Teleport to player", "Type a name")
+
+	local tpButton = make("TextButton", tpRow, {
+		Position = UDim2.new(1, -(104 + 12), 0.5, -19),
+		Size = UDim2.fromOffset(104, 38),
+		BackgroundColor3 = Color3.fromRGB(40, 38, 40),
+		BorderSizePixel = 0,
+		Text = "TELEPORT",
+		TextColor3 = Color3.fromRGB(228, 228, 230),
+		Font = Enum.Font.GothamBold,
+		TextSize = 10,
+		AutoButtonColor = false,
+	})
+	addCorner(tpButton, 8)
+	addStroke(tpButton, OUTLINE, 0.2)
+	addHover(tpButton, Color3.fromRGB(40, 38, 40), mutedRed)
+
+	local tpBox = make("TextBox", tpRow, {
+		Position = UDim2.new(1, -(190 + 12 + 104 + 10), 0.5, -19),
+		Size = UDim2.fromOffset(190, 38),
+		BackgroundColor3 = Color3.fromRGB(32, 32, 34),
+		BorderSizePixel = 0,
+		Text = "",
+		PlaceholderText = "Player name...",
+		PlaceholderColor3 = DIM,
+		TextColor3 = Color3.fromRGB(200, 200, 204),
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		ClearTextOnFocus = false,
+	})
+	addCorner(tpBox, 8)
+	addStroke(tpBox, Color3.fromRGB(70, 70, 73), 0.25)
+
+	local function findPlayer(query)
+		query = query:lower():gsub("^%s+", ""):gsub("%s+$", "")
+		if query == "" then
+			return nil
+		end
+		local prefixMatch, substringMatch
+		for _, other in ipairs(Players:GetPlayers()) do
+			if other ~= player then
+				local name = other.Name:lower()
+				local display = other.DisplayName:lower()
+				if name == query or display == query then
+					return other
+				end
+				if not prefixMatch and (name:sub(1, #query) == query or display:sub(1, #query) == query) then
+					prefixMatch = other
+				end
+				if not substringMatch and (name:find(query, 1, true) or display:find(query, 1, true)) then
+					substringMatch = other
+				end
+			end
+		end
+		return prefixMatch or substringMatch
+	end
+
+	local function teleportToPlayer()
+		local target = findPlayer(tpBox.Text)
+		if not target then
+			tpStatus.Text = tpBox.Text == "" and "Type a name" or "Player not found"
+			return
+		end
+		local targetRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+		if not targetRoot then
+			tpStatus.Text = target.Name .. " has no character"
+			return
+		end
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not root then
+			tpStatus.Text = "Waiting for character..."
+			return
+		end
+		root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
+		root.AssemblyLinearVelocity = Vector3.zero
+		tpStatus.Text = "Teleported to " .. target.Name
+	end
+
+	tpButton.Activated:Connect(teleportToPlayer)
+	tpBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			teleportToPlayer()
+		end
+	end)
+
+	-- infinite jump: one jump per press, with a short cooldown
+	local INF_JUMP_COOLDOWN = 0.25
+	local lastInfJump = 0
+
+	local function infiniteJump()
+		if not state.infJump then
+			return
+		end
+		local now = os.clock()
+		if now - lastInfJump < INF_JUMP_COOLDOWN then
+			return
+		end
+		local h = currentHumanoid()
+		if h and h.Health > 0 then
+			lastInfJump = now
+			h:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end
+
+	-- keyboard / gamepad: InputBegan fires once per press, so holding the key does nothing
+	table.insert(globalConnections, UserInputService.InputBegan:Connect(function(input)
+		if UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.Space or input.KeyCode == Enum.KeyCode.ButtonA then
+			infiniteJump()
+		end
+	end))
+
+	-- touch-only devices: the on-screen jump button only exposes JumpRequest
+	table.insert(globalConnections, UserInputService.JumpRequest:Connect(function()
+		if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+			infiniteJump()
+		end
+	end))
+
+	-- re-bind on respawn and enforce every physics step
+	table.insert(globalConnections, RunService.Stepped:Connect(function()
+		local h = currentHumanoid()
+		if h ~= humanoid then
+			bindHumanoid(h)
+		end
+		enforce()
+	end))
+
+	gui.Destroying:Connect(function()
+		state.infJump = false
+		state.walk = false
+		state.jump = false
+		restoreWalk()
+		restoreJump()
+		disconnectAll(humanoidConnections)
 	end)
 end)()
 
