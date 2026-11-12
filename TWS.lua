@@ -342,6 +342,7 @@ local tabSpecs = {
 	{ id = "box", label = "BOX" },
 	{ id = "fishing", label = "FISHING" },
 	{ id = "mopping", label = "MOPPING" },
+	{ id = "farm", label = "FARM" },
     { id = "planetarium", label = "PLANETARIUM" },
 	{ id = "character", label = "CHARACTER" },
 	{ id = "background", label = "BACKGROUND" },
@@ -351,8 +352,8 @@ local pages = {}
 local tabButtons = {}
 local TAB_IDLE = Color3.fromRGB(140, 140, 145)
 local PAGE_Y = 118
-local TAB_PITCH = 88
-local TAB_WIDTH = 84
+local TAB_PITCH = 78
+local TAB_WIDTH = 76
 local INDICATOR_WIDTH = 50
 local INDICATOR_INSET = (TAB_WIDTH - INDICATOR_WIDTH) / 2
 
@@ -2819,7 +2820,7 @@ end)()
 				if not (character and humanoid and root) or humanoid.Health <= 0 then
 					setStatus("Waiting for character...")
 					task.wait(0.25)
-				elseif not tool then
+				elseif not tool and option.getBuyDetector then
 					if tryBuy() then
 						setStatus("Buying mop...")
 					else
@@ -3948,6 +3949,353 @@ end)()
 		restoreWalk()
 		restoreJump()
 		disconnectAll(humanoidConnections)
+	end)
+end)()
+
+;(function()
+	local RunService = game:GetService("RunService")
+	local farmPage = pages.farm
+
+	-- add more entries here to add more farm tools
+	local TOOL_OPTIONS = {
+		{
+			name = "Neon Scythe",     -- label in the dropdown
+			toolName = "Neon Scythe", -- name of the Tool once it's in your inventory
+			getBuyDetector = function()
+				local buyables = workspace:FindFirstChild("Buyables_Important")
+				local item = buyables and buyables:GetChildren()[34]
+				return item and item:FindFirstChild("ClickDetector")
+			end,
+		},
+		{
+			name = "Treacherous Scythe",
+			toolName = "Treacherous Scythe",
+			getBuyDetector = nil,
+		},
+	}
+
+	local state = { enabled = false, option = TOOL_OPTIONS[1] }
+	for _, option in ipairs(TOOL_OPTIONS) do
+		if option.name == config.farmTool then
+			state.option = option
+		end
+	end
+
+	local FARM_DEPTH = 5        -- studs below the guard's root part
+	local ATTACK_INTERVAL = 0.1 -- seconds between attacks
+	local EQUIP_INTERVAL = 0.25
+	local BUY_INTERVAL = 1      -- seconds between click attempts on the buy button
+	local AIM_BIND = "FrozenIslandFarmAim"
+
+	local farmRow, farmStatus = createRow(farmPage, 0, "Auto farm", "Off")
+	local toolRow = createRow(farmPage, 64, "Tool")
+	local toolButton = createValueButton(toolRow, state.option.name .. CHEVRON_DOWN, 265)
+	local toolList = createDropdownList(farmPage, 126)
+	local dropdownOpen = false
+
+	local lastStatus
+	local function setStatus(text)
+		if lastStatus ~= text then
+			lastStatus = text
+			farmStatus.Text = text
+		end
+	end
+
+	local function updateDropdownText()
+		toolButton.Text = state.option.name .. (dropdownOpen and CHEVRON_UP or CHEVRON_DOWN)
+	end
+
+	local function setDropdownOpen(open)
+		dropdownOpen = open
+		local height = math.min(#TOOL_OPTIONS * 35 + 10, 100)
+		animate(toolList, 0.22, { Size = UDim2.fromOffset(704, open and height or 0) })
+		updateDropdownText()
+	end
+
+	local function rebuildOptions()
+		for _, child in ipairs(toolList:GetChildren()) do
+			if child:IsA("GuiButton") or child:IsA("TextLabel") then
+				child:Destroy()
+			end
+		end
+
+		for index, option in ipairs(TOOL_OPTIONS) do
+			local isSelected = state.option == option
+			local row = make("TextButton", toolList, {
+				LayoutOrder = index,
+				Size = UDim2.new(1, -4, 0, 31),
+				BackgroundColor3 = isSelected and ACTIVE_GREEN or ROW,
+				BorderSizePixel = 0,
+				Text = "",
+				AutoButtonColor = false,
+				ZIndex = 9,
+			})
+			addCorner(row, 7)
+			make("TextLabel", row, {
+				Position = UDim2.fromOffset(14, 0),
+				Size = UDim2.new(1, -112, 1, 0),
+				BackgroundTransparency = 1,
+				Text = option.name,
+				TextColor3 = isSelected and Color3.fromRGB(210, 239, 216) or Color3.fromRGB(222, 222, 224),
+				Font = Enum.Font.Gotham,
+				TextSize = 11,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 10,
+			})
+			make("TextLabel", row, {
+				Position = UDim2.new(1, -92, 0, 0),
+				Size = UDim2.fromOffset(78, 31),
+				BackgroundTransparency = 1,
+				Text = isSelected and "SELECTED" or "",
+				TextColor3 = Color3.fromRGB(198, 232, 205),
+				Font = Enum.Font.GothamBold,
+				TextSize = 9,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				ZIndex = 10,
+			})
+			row.Activated:Connect(function()
+				state.option = option
+				config.farmTool = option.name
+				saveSettings()
+				setDropdownOpen(false)
+				rebuildOptions()
+			end)
+			addHover(row, isSelected and ACTIVE_GREEN or ROW, isSelected and Color3.fromRGB(49, 87, 65) or ROW_HOVER)
+		end
+		toolList.CanvasSize = UDim2.new(0, 0, 0, #TOOL_OPTIONS * 35 + 10)
+		updateDropdownText()
+	end
+
+	rebuildOptions()
+
+	toolButton.Activated:Connect(function()
+		setDropdownOpen(not dropdownOpen)
+	end)
+
+	-- finds the selected option's tool in the character or backpack
+	local function findTool(option)
+		local needle = option.toolName:lower()
+		for _, container in ipairs({ player.Character, player:FindFirstChildOfClass("Backpack") }) do
+			if container then
+				for _, item in ipairs(container:GetChildren()) do
+					if item:IsA("Tool") and item.Name:lower() == needle then
+						return item
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	-- target lookup: closest living SanctuaryGuard, or the closest one if none read as alive
+	local guardHealthWarning = false
+
+	local function getTarget(origin)
+		local sanctuary = workspace:FindFirstChild("Sanctuary")
+		local mobs = sanctuary and sanctuary:FindFirstChild("mobs")
+		local mobs2 = mobs and mobs:FindFirstChild("mobs2")
+
+		if not mobs2 then
+			return nil, "Mobs folder not found"
+		end
+
+		local bestAlive, bestAliveDist
+		local bestAny, bestAnyDist
+
+		for _, mob in ipairs(mobs2:GetChildren()) do
+			local mobHumanoid = mob:FindFirstChildOfClass("Humanoid")
+			local part = mob:FindFirstChild("HumanoidRootPart")
+				or mob.PrimaryPart
+				or mob:FindFirstChildWhichIsA("BasePart", true)
+
+			if part then
+				local distance = (part.Position - origin).Magnitude
+
+				if not bestAny or distance < bestAnyDist then
+					bestAny, bestAnyDist = part, distance
+				end
+
+				if mobHumanoid and mobHumanoid.Health > 0 then
+					if not bestAlive or distance < bestAliveDist then
+						bestAlive, bestAliveDist = part, distance
+					end
+				end
+			end
+		end
+
+		if bestAlive then
+			guardHealthWarning = false
+			return bestAlive
+		end
+
+		if bestAny then
+			guardHealthWarning = true
+			return bestAny
+		end
+
+		return nil, "Mobs not found"
+	end
+
+	local aimPoint
+	local autoRotateChanged
+	local equipTimer = 0
+	local attackTimer = 0
+	local buyTimer = BUY_INTERVAL
+
+	local function releaseHumanoid()
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and autoRotateChanged then
+			humanoid.AutoRotate = true
+		end
+		autoRotateChanged = nil
+		aimPoint = nil
+	end
+
+	createSwitch(farmRow, false, function(value)
+		state.enabled = value
+		equipTimer = 0
+		attackTimer = 0
+		buyTimer = BUY_INTERVAL
+		if value then
+			setStatus("Starting...")
+		else
+			setStatus("Off")
+			releaseHumanoid()
+		end
+	end)
+
+	-- main loop: buy if missing, equip, teleport below the guard, face it, attack
+	table.insert(globalConnections, RunService.Heartbeat:Connect(function(dt)
+		if not state.enabled then
+			return
+		end
+
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		local option = state.option
+
+		if not (character and humanoid and root) or humanoid.Health <= 0 then
+			aimPoint = nil
+			setStatus("Waiting for character...")
+			return
+		end
+
+		local tool = findTool(option)
+
+		-- not owned yet: click the buy button
+		if not tool then
+			aimPoint = nil
+			buyTimer += dt
+			local detector = option.getBuyDetector and option.getBuyDetector()
+			if not detector then
+				setStatus(option.name .. " buy button not found")
+			elseif not fireclickdetector then
+				setStatus("fireclickdetector unavailable")
+			else
+				setStatus("Buying " .. option.name .. "...")
+				if buyTimer >= BUY_INTERVAL then
+					buyTimer = 0
+					pcall(fireclickdetector, detector)
+				end
+			end
+			return
+		end
+
+		-- keep the tool equipped
+		if tool.Parent ~= character then
+			aimPoint = nil
+			equipTimer += dt
+			if equipTimer >= EQUIP_INTERVAL then
+				equipTimer = 0
+				humanoid:EquipTool(tool)
+			end
+			setStatus("Equipping " .. tool.Name .. "...")
+			return
+		end
+
+		local targetPart, problem = getTarget(root.Position)
+
+		if not targetPart then
+			aimPoint = nil
+
+			local portal = workspace.Sanctuary.portal.Portal
+			root.CFrame = portal.CFrame + Vector3.new(0, 3, 0)
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+
+			setStatus("Waiting for mobs at portal...")
+			return
+		end
+
+		local targetPos = targetPart.Position
+
+		local FARM_DEPTH = 5
+		local LEFT_OFFSET = 1.2
+
+		-- Face the target while remaining underneath it
+		local belowPos = targetPos - Vector3.new(0, FARM_DEPTH, 0)
+		local facing = Vector3.new(0, 0, -1)
+
+		-- Left relative to the character's facing direction
+		local right = facing:Cross(Vector3.yAxis)
+		local leftOffset = -right * LEFT_OFFSET
+
+		local attackPosition = belowPos + leftOffset
+
+		if humanoid.AutoRotate then
+			humanoid.AutoRotate = false
+			autoRotateChanged = true
+		end
+
+		root.CFrame = CFrame.lookAt(attackPosition, targetPos)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		aimPoint = targetPos
+
+		-- attack
+		attackTimer += dt
+		if attackTimer >= ATTACK_INTERVAL then
+			attackTimer = 0
+			pcall(function()
+				tool:Activate()
+			end)
+		end
+		setStatus(guardHealthWarning and ("Farming (guard health reads 0) with " .. tool.Name) or ("Farming with " .. tool.Name))
+	end))
+
+	-- no collision so the ground under the guard doesn't push you around
+	table.insert(globalConnections, RunService.Stepped:Connect(function()
+		if not state.enabled or not aimPoint then
+			return
+		end
+		local character = player.Character
+		if character then
+			for _, descendant in ipairs(character:GetDescendants()) do
+				if descendant:IsA("BasePart") then
+					descendant.CanCollide = false
+				end
+			end
+		end
+	end))
+
+	-- aim the camera up at the guard after the default camera has updated
+	RunService:BindToRenderStep(AIM_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+		if state.enabled and aimPoint then
+			local camera = workspace.CurrentCamera
+			if camera then
+				camera.CFrame = CFrame.lookAt(camera.CFrame.Position, aimPoint)
+			end
+		end
+	end)
+
+	gui.Destroying:Connect(function()
+		state.enabled = false
+		pcall(function()
+			RunService:UnbindFromRenderStep(AIM_BIND)
+		end)
+		releaseHumanoid()
 	end)
 end)()
 
