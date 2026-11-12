@@ -4220,7 +4220,7 @@ end)()
 		if not targetPart then
 			aimPoint = nil
 
-			local portal = workspace.Sanctuary.portal.Portal
+			local portal = workspace.Sanctuary.Statue.Dummy
 			root.CFrame = portal.CFrame + Vector3.new(0, 3, 0)
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
